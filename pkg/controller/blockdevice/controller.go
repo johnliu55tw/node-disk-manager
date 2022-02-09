@@ -29,9 +29,9 @@ import (
 
 const (
 	blockDeviceHandlerName  = "harvester-block-device-handler"
-	defaultRescanInterval   = 30 * time.Second
-	forceFormatPollInterval = 3 * time.Second
-	forceFormatPollTimeout  = 30 * time.Second
+	defaultRescanInterval   = 10 * time.Second
+	forceFormatPollInterval = 30 * time.Second
+	forceFormatPollTimeout  = 60 * time.Second
 	enqueueDelay            = 10 * time.Second
 )
 
@@ -167,6 +167,7 @@ func (c *Controller) ScanBlockDevicesOnNode() error {
 
 	// either create or update the block device
 	for _, bd := range newBds {
+		logrus.Debugf("[TEST] %s:%s Calling SaveBlockDevice from ScanBlockDevice", bd.Name, bd.Spec.DevPath)
 		bd, err := c.SaveBlockDevice(bd, oldBds, autoProvisionedMap[bd.Name])
 		if err != nil {
 			return err
@@ -191,6 +192,10 @@ func (c *Controller) OnBlockDeviceChange(key string, device *diskv1.BlockDevice)
 	if device == nil || device.DeletionTimestamp != nil || device.Spec.NodeName != c.NodeName {
 		return nil, nil
 	}
+
+	logrus.Debugf("[TEST] %s:%s OnBlockDeviceChange: LastFormattedAt: %v",
+		device.Name, device.Spec.DevPath, device.Status.DeviceStatus.FileSystem.LastFormattedAt)
+	logrus.Debugf("[TEST] device detail: %+v", device)
 
 	var shouldEnqueue bool
 
@@ -263,8 +268,12 @@ func (c *Controller) OnBlockDeviceChange(key string, device *diskv1.BlockDevice)
 	}
 
 	if !reflect.DeepEqual(device, deviceCpy) {
-		if _, err := c.Blockdevices.Update(deviceCpy); err != nil {
-			return device, err
+		logrus.Debugf("[TEST] %s:%s Update device: LastFormattedAt: %v", deviceCpy.Name, deviceCpy.Spec.DevPath, deviceCpy.Status.DeviceStatus.FileSystem.LastFormattedAt)
+		if updatedDev, err := c.Blockdevices.Update(deviceCpy); err != nil {
+			logrus.Errorf("[TEST] Update Error: %v", err)
+			return nil, err
+		} else {
+			logrus.Debugf("[TEST] Device Updated: %+v", updatedDev)
 		}
 	}
 	if shouldEnqueue {
@@ -416,7 +425,8 @@ func (c *Controller) forceFormatDisk(device *diskv1.BlockDevice) (*diskv1.BlockD
 
 	filesystem := device.Spec.FileSystem
 	fsStatus := device.Status.DeviceStatus.FileSystem
-	logrus.Infof("performing format operation of disk %s, mount path %s", device.Spec.DevPath, filesystem.MountPoint)
+	logrus.Infof("performing format operation for disk: dev path: %s, mount path: %s, name: %s",
+		device.Spec.DevPath, filesystem.MountPoint, device.Name)
 
 	// umount the disk if it is mounted
 	if fsStatus.MountPoint != "" {
@@ -444,7 +454,9 @@ func (c *Controller) forceFormatDisk(device *diskv1.BlockDevice) (*diskv1.BlockD
 		logrus.Debugf("polling for single partition %s, found: %t", devPath, bd != nil)
 		return bd != nil, nil
 	}
+
 	if err := wait.PollImmediate(forceFormatPollInterval, forceFormatPollTimeout, poll); err != nil {
+		logrus.Debugf("[TEST] PollImmediate error: %v", wait.ErrWaitTimeout)
 		return device, err
 	}
 
@@ -625,6 +637,7 @@ func (c *Controller) SaveBlockDevice(
 	oldBds map[string]*diskv1.BlockDevice,
 	autoProvisioned bool,
 ) (*diskv1.BlockDevice, error) {
+	logrus.Debugf("[TEST] %s:%s SaveBlockDevice", bd.Name, bd.Spec.DevPath)
 	provision := func(bd *diskv1.BlockDevice) {
 		bd.Spec.FileSystem.ForceFormatted = true
 		bd.Spec.FileSystem.Provisioned = true
